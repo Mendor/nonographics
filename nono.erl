@@ -1,118 +1,142 @@
 -module (nono).
--compile ([export_all]).
+% -compile ([export_all]).
+-export ([nif_load/0, solve/2, pp/1]).
 -on_load (nif_load/0).
 
 nif_load() ->
     ok = erlang:load_nif("./nono", 0).
 
-solve(Hor, Ver) ->
-    Width  = length(Hor),
-    Height = length(Ver),
-    Field = field(Width, Height),
-    solve({hor, false}, Hor, Ver, lists:seq(1, Width), lists:seq(1, Height), Field).
+%% Solve the puzzle!
+%% Exported function. Put the numbers as horizontal and vertical data
+%%   parameters; see README for the details.
+solve(HorData, VerData) ->
+    Width  = length(HorData),
+    Height = length(VerData),
+    Field  = field(Width, Height),
+    solve({hor, false},
+           HorData, VerData,
+           lists:seq(1, Width), lists:seq(1, Height),
+           Field).
 
+%% Generate a field with required width and height.
 field(Width, Height) ->
-    [ lists:duplicate(Width, $-) || _Y <- lists:seq(1, Height)].
+    [ lists:duplicate(Width, $-) || _Y <- lists:seq(1, Height) ].
 
-transform(F) ->
-    [H | _] = F,
-    [ col(F, I) || I <- lists:seq(1, length(H))].
+%% Transform field rows to columns and columns to rows.
+transform(Field) ->
+    [Line | _] = Field,
+    [ col(Field, I) || I <- lists:seq(1, length(Line)) ].
 
+%% Get single column from the field.
 col(Field, N) ->
     [ lists:nth(N, R) || R <- Field ].
 
-solve({hor, true}, _Hor, _Ver, _W, _H, F) ->
-    F;
-solve({hor, false}, Hor, Ver, W, H, F) ->
-    NF = transform(F),
-    SF = lists:map(fun(C) ->
-        Line = lists:nth(C, NF),
+%% Attempts to solve puzzle from the field data.
+solve({hor, true}, _HorData, _VerData, _W, _H, Field) ->
+    % If the last pair of vertical & horizontal passes finished without any
+    % changes, just return current field state, nothin' to do here anymore.
+    Field;
+solve({hor, false}, HorData, VerData, Width, Height, Field) ->
+    % Pass based on horizontal data (columns).
+    % Transform field to make working with columns easier.
+    TrField = transform(Field),
+    SolvedField = solve_field(TrField, HorData, Width),
+    Unsolvable = SolvedField =:= TrField,
+    solve({ver, Unsolvable},
+          HorData, VerData,
+          Width, Height,
+          transform(SolvedField)); % don't forget to transform the field back
+solve({ver, UHor}, HorData, VerData, Width, Height, Field) ->
+    % Pass based on vertical data (rows)
+    SolvedField = solve_field(Field, VerData, Height),
+    Unsolvable = SolvedField =:= Field andalso UHor =:= true,
+    % pp(SolvedField),
+    % io:format("~n~n~n"),
+    solve({hor, Unsolvable},
+          HorData, VerData,
+          Width, Height,
+          SolvedField).
+
+%% Field solution iteration.
+solve_field(Field, Data, Size) ->
+    lists:map(fun(C) ->
+        Line = lists:nth(C, Field),
+        % If the current line is unsolved, try to improve the situation.
         case string:str(Line, "-") of
             0 -> Line;
-            _ -> solve_line(lists:nth(C, Hor), Line)
+            _ -> solve_line(lists:nth(C, Data), Line)
         end
-    end, W),
-    NS = SF =:= NF,
-    solve({ver, NS}, Hor, Ver, W, H, transform(SF));
-solve({ver, M1}, Hor, Ver, W, H, F) ->
-    SF = lists:map(fun(C) ->
-        Line = lists:nth(C, F),
-        case string:str(Line, "-") of
-            0 -> Line;
-            _ -> solve_line(lists:nth(C, Ver), Line)
-        end
-    end, H),
-    NS = SF =:= F andalso M1 =:= true,
-    [ io:format("~s~n", [I]) || I <- SF],
-    % io:format("~n M1 = ~p  NS = ~p~n", [M1, NS]),
-    io:format("~n~n~n"),
-    solve({hor, NS}, Hor, Ver, W, H, SF).
+    end, Size).
 
-solve_line(N, Line) ->
-    solve_line(N, min_length(N), Line, string:len(Line)).
+%% Line solution "API".
+solve_line(Nums, LineData) ->
+    solve_line(Nums, min_length(Nums), LineData, string:len(LineData)).
 
-solve_line(N, ML, _Line, LL) when ML > LL ->
-    erlang:error({baddata, N});
-solve_line(N, ML, _Line, LL) when ML == LL ->
-    string:substr(lists:flatten([ string:concat(lists:duplicate(X, $X), ".") || X <- N]), 1, ML);
-solve_line(N, _ML, Line, LL) ->
-    S = checkseqs(seqs(N, LL), Line),
-    case S of
-        [] -> Line;
-        U  -> uniq(U)
+%% Line solution iteration.
+solve_line(Nums, MinDataLen, _LD, LineLen) when MinDataLen > LineLen ->
+    % If the minimal possible length based on the provided line data is larger
+    % than puzzle's line length, there is an error in input data, definitely.
+    erlang:error({baddata, Nums});
+solve_line(Nums, MinDataLen, _LD, LineLen) when MinDataLen == LineLen ->
+    % If there is only one solution for the line; useless hack.
+    string:substr(lists:flatten(
+        [ string:concat(lists:duplicate(X, $X), ".") || X <- Nums ]
+    ), 1, MinDataLen);
+solve_line(Nums, _MDL, LineData, LineLen) ->
+    % All other cases.
+    % TODO: write something there
+    case check_seqs(seqs(Nums, LineLen), LineData) of
+        [] -> LineData;
+        U  -> common(U)
     end.
 
-min_length(N) ->
-    lists:foldl(fun(X, Sum) -> X + Sum end, 0, N) + length(N) - 1.
+%% Find minimal possible length of the puzzle line based on it's arguments.
+min_length(Nums) ->
+    lists:foldl(fun(X, Sum) -> X + Sum end, 0, Nums) + length(Nums) - 1.
 
-seqs(N, L) ->
-    M = L - lists:sum(N) + 1,
-    C = length(N) + 1,
-    S = lists:duplicate(C, lists:seq(1, M)),
-    Sc = combos(S),
-    V = [ lists:flatten(lists:zipwith(
-            fun(X, Y) -> X ++ Y end,
-            [ lists:duplicate(Sp, $.) || Sp <- E],
-            [ lists:duplicate(Z, $X) || Z <- N ] ++ [""]
-        )) || E <- Sc],
-    CV = [ string:substr(I, 2, length(I) - 2) || I <- V ],
-    lists:filter(fun(X) -> length(X) == L end, CV).
+%% Generate all sequences satisfying line parameters.
+seqs(_Nums, _LineLen) ->
+    "You don't want to know how terrible is pure Erlang sequences generator. "
+    ++ "Compile and load NIF to do it best.".
 
-combos(Lols) ->
-    F = fun(_F, []) -> [[]]; (F, [H|T]) -> 
-        [ [X|Y] || X <- H, Y <- F(F, T)]
-    end,
-    F(F, Lols).
-
-uniq(Lols) ->
+%% Find overlapping areas of provided potential solutions. "API" part.
+common(Lols) ->
     [H | T] = Lols,
-    uniq(T, H).
+    common(T, H).
 
-uniq([], State) ->
+%% Find overlapping areas of provided potential solutions. Internal part.
+common([], State) ->
     State;
-uniq([CL | TL], State) ->
-    NS = [
-        case lists:nth(CC, CL) == lists:nth(CC, State) of
-            true  -> lists:nth(CC, CL);
+common([CurrentList | OtherLists], State) ->
+    NewState = [
+        case lists:nth(Char, CurrentList) == lists:nth(Char, State) of
+            true  -> lists:nth(Char, CurrentList);
             false -> $-
         end
-        || CC <- lists:seq(1, length(CL))],
-    uniq(TL, NS).
+        || Char <- lists:seq(1, length(CurrentList)) ],
+    common(OtherLists, NewState).
 
-checkseqs(Lols, P) ->
-    NP = lists:flatten(["^"] ++ [
+%% Filter potential solutions which match unsolved line pattern. "API" part.
+check_seqs(Lols, Pattern) ->
+    % Just generate a regular expression from text pattern to do it.
+    Regex = lists:flatten(["^"] ++ [
         case C of
             $- -> ".";
             $. -> "\\.";
             $X -> "X"
         end
-        || C <- P ] ++ ["$"]),
-    checkseqs(Lols, NP, []).
+        || C <- Pattern ] ++ ["$"]),
+    check_seqs(Lols, Regex, []).
 
-checkseqs([], _P, Acc) ->
+%% Filter potential solutions which match unsolved line pattern. Internal part.
+check_seqs([], _Regex, Acc) ->
     Acc;
-checkseqs([CL | TL], P, Acc) ->
-    case re:run(CL, P) of
-        nomatch -> checkseqs(TL, P, Acc);
-        _Match  -> checkseqs(TL, P, Acc ++ [CL])
+check_seqs([CurrentList | OtherLists], Regex, Acc) ->
+    case re:run(CurrentList, Regex) of
+        nomatch -> check_seqs(OtherLists, Regex, Acc);
+        _Match  -> check_seqs(OtherLists, Regex, Acc ++ [CurrentList])
     end.
+
+%% Pretty print multiple strings, and nothing else.
+pp(Strings) ->
+    [ io:format("~s~n", [S]) || S <- Strings ].
