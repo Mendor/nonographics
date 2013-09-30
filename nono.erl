@@ -69,7 +69,7 @@ seqs(N, L) ->
     M = L - lists:sum(N) + 1,
     C = length(N) + 1,
     S = lists:duplicate(C, lists:seq(1, M)),
-    Sc = combos(S, M + 1),
+    Sc = combos(S),
     V = [ lists:flatten(lists:zipwith(
             fun(X, Y) -> X ++ Y end,
             [ lists:duplicate(Sp, $.) || Sp <- E],
@@ -78,20 +78,11 @@ seqs(N, L) ->
     CV = [ string:substr(I, 2, length(I) - 2) || I <- V ],
     lists:filter(fun(X) -> length(X) == L end, CV).
 
-combos(Lols, C) ->
+combos(Lols) ->
     F = fun(_F, []) -> [[]]; (F, [H|T]) -> 
-        [ check(X, Y, C) || X <- H, Y <- F(F, T)]
+        [ [X|Y] || X <- H, Y <- F(F, T)]
     end,
-    R = F(F, Lols),
-    lists:filter(fun(X) -> length(X) == length(hd(R)) end, R).
-
-check(X, Y, C) ->
-    XY = [X|Y],
-    S = lists:sum(XY),
-    case S > C of
-        true -> Y;
-        false -> XY
-    end.
+    F(F, Lols).
 
 uniq(Lols) ->
     [H | T] = Lols,
