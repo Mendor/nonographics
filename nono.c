@@ -48,14 +48,15 @@ void do_dump(int char_seek,int i_seek)
 static ERL_NIF_TERM seqs_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[]) {
     unsigned int i;
     // clearance
-    if (vars != NULL) free(vars);
-    if (buf != NULL)
+    if (vars != NULL)
+        free(vars);
+    if (buf != NULL)
     {
         for (i = 0; i < blocks; i++)
             free(buf[i]);
         free(buf);
     }
-    if (currentv!=vNULL)
+    if (current != NULL)
         free(current);
 
     // read input parameters
